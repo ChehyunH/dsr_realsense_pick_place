@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# ROS 2 / colcon
+build/
+install/
+log/
+
+# Local tooling
+.vscode/
+.idea/
+.DS_Store
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+
+# Large local model files
+*.pt
+
