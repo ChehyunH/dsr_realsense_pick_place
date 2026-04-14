@@ -33,7 +33,6 @@ Qt-ROS 이벤트 루프 통합:
 """
 
 import json
-import os
 import sys
 import math
 from pathlib import Path
@@ -79,14 +78,23 @@ class PickPlaceGuiNode(Node):
         # ROS 디버그 토픽 구독 모드 / 로컬 YOLO 모드 선택
         self.declare_parameter('use_local_yolo', True)
         self.declare_parameter('weights_path', '')
+        self.declare_parameter('require_best_pt', True)
         self.declare_parameter('camera_index', 0)
         self.declare_parameter('imgsz', 640)
         self.declare_parameter('conf_threshold', 0.25)
         self.declare_parameter('fov_h_deg', 60.0)
         self.declare_parameter('default_object_height_m', 0.12)
+        self.declare_parameter('use_realsense', True)
+        self.declare_parameter('rs_serial', '')
+        self.declare_parameter('rs_width', 640)
+        self.declare_parameter('rs_height', 480)
+        self.declare_parameter('rs_fps', 30)
         self.declare_parameter('origin_x', -0.80)
         self.declare_parameter('origin_y', 0.0)
         self.declare_parameter('origin_z', -0.96)
+        self.declare_parameter('calib_dx_mm', -20.0)
+        self.declare_parameter('calib_dy_mm', -20.0)
+        self.declare_parameter('calib_dz_mm', 140.0)
 
         # ROS 토픽으로 받은 영상/검출 결과를 Qt 위젯에서 바로 쓸 수 있게
         # 화면 표시용 상태를 멤버 변수로 유지한다.
@@ -115,20 +123,38 @@ class PickPlaceGuiNode(Node):
     def _repo_root(self) -> Path:
         return Path(__file__).resolve().parent.parent
 
-    def _find_default_weights(self) -> Path | None:
-        root = self._repo_root() / 'runs'
-        cands = list(root.rglob('best.pt'))
+    def _find_best_pt(self, search_under: Path) -> Path | None:
+        cands = list(search_under.rglob('best.pt'))
         if not cands:
             return None
         return max(cands, key=lambda p: p.stat().st_mtime)
 
     def _init_local_yolo(self):
         weights = str(self.get_parameter('weights_path').value).strip()
+        require_best_pt = bool(self.get_parameter('require_best_pt').value)
         if weights:
-            self.weights_path = Path(weights).expanduser().resolve()
+            configured = Path(weights).expanduser()
+            if configured.is_absolute():
+                self.weights_path = configured.resolve()
+            else:
+                # 팀 환경 호환: 상대경로는 프로젝트 루트 기준으로 해석한다.
+                self.weights_path = (self._repo_root() / configured).resolve()
         else:
-            found = self._find_default_weights()
+            # yolo_live_cam_3d_metrics.py 와 동일하게 runs 아래 최신 best.pt를 기본 사용
+            found = self._find_best_pt(self._repo_root() / 'runs')
+            if found is None and require_best_pt:
+                raise RuntimeError(
+                    'runs 아래에서 best.pt를 찾지 못했습니다. '
+                    'weights_path 파라미터에 best.pt 경로를 지정하세요.'
+                )
             self.weights_path = found if found is not None else Path('yolov8n.pt')
+
+        if require_best_pt and self.weights_path.name != 'best.pt':
+            raise RuntimeError(
+                f'require_best_pt=true 인데 모델이 best.pt가 아닙니다: {self.weights_path}'
+            )
+        if not self.weights_path.is_file() and self.weights_path.name == 'best.pt':
+            raise RuntimeError(f'best.pt 파일이 없습니다: {self.weights_path}')
 
         self.model = YOLO(str(self.weights_path))
         self.model_names = (
@@ -136,20 +162,58 @@ class PickPlaceGuiNode(Node):
             if isinstance(self.model.names, dict)
             else dict(enumerate(self.model.names))
         )
-        self.cap = cv2.VideoCapture(int(self.get_parameter('camera_index').value))
-        if not self.cap.isOpened():
-            raise RuntimeError('카메라를 열 수 없습니다. camera_index 파라미터를 확인하세요.')
-
         self.imgsz = int(self.get_parameter('imgsz').value)
         self.conf_threshold = float(self.get_parameter('conf_threshold').value)
         self.fov_h_deg = float(self.get_parameter('fov_h_deg').value)
         self.default_object_height_m = float(self.get_parameter('default_object_height_m').value)
+        self.use_realsense = bool(self.get_parameter('use_realsense').value)
+        self.rs_serial = str(self.get_parameter('rs_serial').value).strip()
+        self.rs_width = int(self.get_parameter('rs_width').value)
+        self.rs_height = int(self.get_parameter('rs_height').value)
+        self.rs_fps = int(self.get_parameter('rs_fps').value)
         self.origin_x = float(self.get_parameter('origin_x').value)
         self.origin_y = float(self.get_parameter('origin_y').value)
         self.origin_z = float(self.get_parameter('origin_z').value)
+        self.calib_dx_mm = float(self.get_parameter('calib_dx_mm').value)
+        self.calib_dy_mm = float(self.get_parameter('calib_dy_mm').value)
+        self.calib_dz_mm = float(self.get_parameter('calib_dz_mm').value)
+
+        self.pipeline = None
+        self.align = None
+        self.depth_scale = 0.0
+        self.rs_fx = None
+        self.rs_fy = None
+        self.rs_cx = None
+        self.rs_cy = None
+        self.cap = None
+
+        if self.use_realsense:
+            import pyrealsense2 as rs
+            self.rs = rs
+            self.pipeline = rs.pipeline()
+            cfg = rs.config()
+            if self.rs_serial:
+                cfg.enable_device(self.rs_serial)
+            cfg.enable_stream(rs.stream.depth, self.rs_width, self.rs_height, rs.format.z16, self.rs_fps)
+            cfg.enable_stream(rs.stream.color, self.rs_width, self.rs_height, rs.format.bgr8, self.rs_fps)
+            profile = self.pipeline.start(cfg)
+            depth_sensor = profile.get_device().first_depth_sensor()
+            self.depth_scale = float(depth_sensor.get_depth_scale())
+            self.align = rs.align(rs.stream.color)
+            color_profile = profile.get_stream(rs.stream.color).as_video_stream_profile()
+            intr = color_profile.get_intrinsics()
+            self.rs_fx = float(intr.fx)
+            self.rs_fy = float(intr.fy)
+            self.rs_cx = float(intr.ppx)
+            self.rs_cy = float(intr.ppy)
+        else:
+            self.cap = cv2.VideoCapture(int(self.get_parameter('camera_index').value))
+            if not self.cap.isOpened():
+                raise RuntimeError('카메라를 열 수 없습니다. camera_index 파라미터를 확인하세요.')
 
         self.local_timer = self.create_timer(0.033, self._tick_local_yolo)
-        self.get_logger().info(f'로컬 YOLO 모드 시작: weights={self.weights_path}')
+        mode = 'RealSense depth' if self.use_realsense else 'pinhole approx'
+        self.get_logger().info(f'로컬 YOLO 모드 시작: weights={self.weights_path} | mode={mode}')
 
     def _intrinsics_from_fov(self, w: int, h: int, fov_h_deg: float):
         fh = math.radians(fov_h_deg)
@@ -174,13 +238,63 @@ class PickPlaceGuiNode(Node):
             z_cam - self.origin_z,
         )
 
+    def _apply_calibration_offset_mm(self, x_abs: float, y_abs: float, z_abs: float):
+        return (
+            x_abs + (self.calib_dx_mm / 1000.0),
+            y_abs + (self.calib_dy_mm / 1000.0),
+            z_abs + (self.calib_dz_mm / 1000.0),
+        )
+
+    def _clip_box_to_image(self, x1: float, y1: float, x2: float, y2: float, w: int, h: int):
+        xi1 = int(max(0, min(w - 1, round(x1))))
+        yi1 = int(max(0, min(h - 1, round(y1))))
+        xi2 = int(max(0, min(w - 1, round(x2))))
+        yi2 = int(max(0, min(h - 1, round(y2))))
+        if xi2 < xi1:
+            xi1, xi2 = xi2, xi1
+        if yi2 < yi1:
+            yi1, yi2 = yi2, yi1
+        return xi1, yi1, xi2, yi2
+
+    def _median_depth_in_roi(self, depth_m: np.ndarray, x1: float, y1: float, x2: float, y2: float, w: int, h: int):
+        bw = x2 - x1
+        bh = y2 - y1
+        if bw < 4 or bh < 4:
+            return float('nan')
+        dx = bw * 0.08 * 0.5
+        dy = bh * 0.08 * 0.5
+        xa, ya = x1 + dx, y1 + dy
+        xb, yb = x2 - dx, y2 - dy
+        if xb <= xa or yb <= ya:
+            xa, ya, xb, yb = x1, y1, x2, y2
+        xi1, yi1, xi2, yi2 = self._clip_box_to_image(xa, ya, xb, yb, w, h)
+        roi = depth_m[yi1: yi2 + 1, xi1: xi2 + 1]
+        valid = roi[np.isfinite(roi) & (roi > 0.05) & (roi < 10.0)]
+        if valid.size < 3:
+            return float('nan')
+        return float(np.median(valid))
+
     def _tick_local_yolo(self):
-        ok, frame = self.cap.read()
-        if not ok or frame is None:
-            return
+        depth_m = None
+        if self.use_realsense:
+            frames = self.pipeline.wait_for_frames()
+            aligned = self.align.process(frames)
+            depth_frame = aligned.get_depth_frame()
+            color_frame = aligned.get_color_frame()
+            if not depth_frame or not color_frame:
+                return
+            frame = np.asanyarray(color_frame.get_data())
+            raw = np.asanyarray(depth_frame.get_data()).astype(np.float32)
+            depth_m = raw * float(self.depth_scale)
+            fx, fy, cx, cy = self.rs_fx, self.rs_fy, self.rs_cx, self.rs_cy
+        else:
+            ok, frame = self.cap.read()
+            if not ok or frame is None:
+                return
+            h, w = frame.shape[:2]
+            fx, fy, cx, cy = self._intrinsics_from_fov(w, h, self.fov_h_deg)
 
         h, w = frame.shape[:2]
-        fx, fy, cx, cy = self._intrinsics_from_fov(w, h, self.fov_h_deg)
         results = self.model.predict(
             frame,
             imgsz=self.imgsz,
@@ -203,7 +317,10 @@ class PickPlaceGuiNode(Node):
                 cx_box = 0.5 * (x1 + x2)
                 cy_box = 0.5 * (y1 + y2)
                 bh = max(y2 - y1, 1.0)
-                z_m = self._estimate_depth_m(bh, fy, self.default_object_height_m)
+                if self.use_realsense and depth_m is not None:
+                    z_m = self._median_depth_in_roi(depth_m, x1, y1, x2, y2, w, h)
+                else:
+                    z_m = self._estimate_depth_m(bh, fy, self.default_object_height_m)
                 if math.isnan(z_m):
                     continue
 
@@ -211,6 +328,24 @@ class PickPlaceGuiNode(Node):
                 y_opt = ((cy_box - cy) / fy) * z_m
                 x_cam, y_cam, z_cam = self._camera_to_project_camera_coords(x_opt, y_opt, z_m)
                 x_abs, y_abs, z_abs = self._to_absolute_coords(x_cam, y_cam, z_cam)
+                x_abs, y_abs, z_abs = self._apply_calibration_offset_mm(x_abs, y_abs, z_abs)
+
+                pt = (int(round(cx_box)), int(round(cy_box)))
+                cv2.circle(out, pt, 6, (0, 255, 255), -1, cv2.LINE_AA)
+                overlay = (
+                    f'{label} c=({cx_box:.0f},{cy_box:.0f})px '
+                    f'ABS=[{x_abs:+.3f},{y_abs:+.3f},{z_abs:+.3f}]m'
+                )
+                cv2.putText(
+                    out,
+                    overlay,
+                    (10, 28 + (i * 18)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (220, 220, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
 
                 raw_dets.append((int(round(cx_box)), int(round(cy_box)), int(max(x2 - x1, 1.0)),
                                  int(max(y2 - y1, 1.0)), label, conf))

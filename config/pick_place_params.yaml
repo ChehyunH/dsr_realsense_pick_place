@@ -82,3 +82,17 @@ pick_place_node:
     workspace_z_min: 0.0
     workspace_z_max: 0.60
     target_pose_topic: "/selected_object_pose"
+
+gui_node:
+  ros__parameters:
+    use_local_yolo: true
+    require_best_pt: true
+    # 팀 환경 공용: 프로젝트 루트 기준 상대경로
+    weights_path: "runs/weights/weights/best.pt"
+    use_realsense: true
+    rs_serial: ""
+    rs_width: 640
+    rs_height: 480
+    rs_fps: 30
+    conf_threshold: 0.25
+    imgsz: 640
