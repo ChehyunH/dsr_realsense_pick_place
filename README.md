@@ -5,6 +5,135 @@ YOLOv8 객체 인식 기반 Pick & Place를 수행하는 ROS 2 패키지.
 
 ---
 
+## Git으로 공유하고 Pull Request 하는 법
+
+### 1. 저장소 Fork 및 Clone
+
+GitHub에서 이 저장소를 Fork한 뒤 로컬로 Clone한다.
+
+```bash
+# 본인 GitHub 계정으로 Fork한 저장소를 Clone
+git clone https://github.com/<내-계정>/dsr_realsense_pick_place.git
+cd dsr_realsense_pick_place
+```
+
+원본 저장소(upstream)를 원격으로 추가해 두면 나중에 최신 변경사항을 받아올 수 있다.
+
+```bash
+git remote add upstream https://github.com/<원본-계정>/dsr_realsense_pick_place.git
+git remote -v  # origin(내 Fork) + upstream(원본) 확인
+```
+
+---
+
+### 2. 작업 브랜치 생성
+
+`main` 브랜치에서 직접 작업하지 않고, 기능/수정 단위로 브랜치를 만든다.
+
+```bash
+# 최신 상태로 업데이트 후 브랜치 생성
+git fetch upstream
+git checkout -b feat/내-기능-이름 upstream/main
+```
+
+브랜치 이름 예시:
+
+| 유형 | 예시 |
+|------|------|
+| 새 기능 | `feat/multi-object-pick` |
+| 버그 수정 | `fix/tf-transform-timeout` |
+| 문서 수정 | `docs/calibration-guide` |
+| 파라미터 조정 | `config/workspace-tuning` |
+
+---
+
+### 3. 변경 후 Commit
+
+```bash
+# 변경된 파일 확인
+git status
+
+# 파일 스테이징 (수정한 파일만 명시적으로 추가)
+git add dsr_realsense_pick_place/pick_place_node.py
+git add config/pick_place_params.yaml
+
+# 커밋 — 무엇을 왜 바꿨는지 한 줄로 요약
+git commit -m "fix: TF 변환 timeout을 0.1s → 0.3s로 늘려 느린 TF 발행 환경 대응"
+```
+
+커밋 메시지 앞에 유형 접두사를 붙이면 이력을 읽기 쉽다.
+
+| 접두사 | 사용 상황 |
+|--------|----------|
+| `feat:` | 새로운 기능 추가 |
+| `fix:` | 버그 수정 |
+| `docs:` | 문서만 수정 |
+| `config:` | 파라미터/설정 조정 |
+| `refactor:` | 동작 변경 없는 코드 정리 |
+
+---
+
+### 4. Fork 저장소에 Push
+
+```bash
+git push origin feat/내-기능-이름
+```
+
+---
+
+### 5. Pull Request 생성
+
+1. GitHub에서 본인 Fork 저장소 페이지로 이동한다.
+2. **"Compare & pull request"** 버튼을 클릭한다.
+3. 아래 항목을 작성한다.
+
+| 항목 | 작성 내용 |
+|------|----------|
+| **제목** | 변경 내용을 한 줄로 요약 (커밋 메시지와 유사하게) |
+| **설명** | 변경 이유, 테스트 환경(가상/실기), 확인한 토픽·상태 등 |
+| **base 브랜치** | `main` (원본 저장소) |
+| **compare 브랜치** | 방금 Push한 브랜치 |
+
+4. **"Create pull request"** 를 클릭해 제출한다.
+
+---
+
+### 6. 리뷰 후 반영
+
+리뷰 중 수정이 필요하면 같은 브랜치에 추가 커밋을 push하면 PR에 자동 반영된다.
+
+```bash
+# 수정 후 추가 커밋
+git add 수정한-파일
+git commit -m "fix: 리뷰 반영 — 변수명 통일"
+git push origin feat/내-기능-이름
+```
+
+Merge 된 브랜치는 삭제해도 된다.
+
+```bash
+# 로컬 브랜치 삭제
+git branch -d feat/내-기능-이름
+
+# 원격 브랜치 삭제
+git push origin --delete feat/내-기능-이름
+```
+
+---
+
+### 7. 원본 저장소 최신 상태 반영 (upstream 동기화)
+
+다른 팀원의 변경사항을 내 Fork에 반영할 때 사용한다.
+
+```bash
+git fetch upstream
+git checkout main
+git merge upstream/main
+git push origin main
+```
+
+---
+
 ## 시스템 구성
 
 ```
