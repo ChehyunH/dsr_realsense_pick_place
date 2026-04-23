@@ -1,185 +1,134 @@
-# dsr_realsense_pick_place
+# DSR RealSense Pick & Place
 
-Doosan E0509 협동 로봇과 Intel RealSense RGB-D 카메라를 이용해
-YOLOv8 객체 인식 기반 Pick & Place를 수행하는 ROS 2 패키지.
-
----
-
-## Git으로 공유하고 Pull Request 하는 법
-
-### 1. 저장소 Fork 및 Clone
-
-GitHub에서 이 저장소를 Fork한 뒤 로컬로 Clone한다.
-
-```bash
-# 본인 GitHub 계정으로 Fork한 저장소를 Clone
-git clone https://github.com/<내-계정>/dsr_realsense_pick_place.git
-cd dsr_realsense_pick_place
-```
-
-원본 저장소(upstream)를 원격으로 추가해 두면 나중에 최신 변경사항을 받아올 수 있다.
-
-```bash
-git remote add upstream https://github.com/<원본-계정>/dsr_realsense_pick_place.git
-git remote -v  # origin(내 Fork) + upstream(원본) 확인
-```
+**Full perception-to-control pipeline on a Doosan E0509 collaborative robot.**  
+Intel RealSense RGB-D + custom-trained YOLOv8 + ROS 2 → physical pick & place.
 
 ---
 
-### 2. 작업 브랜치 생성
+## Demo
 
-`main` 브랜치에서 직접 작업하지 않고, 기능/수정 단위로 브랜치를 만든다.
+[![Pick and Place Demo](https://img.youtube.com/vi/4IkEsHyye2E/maxresdefault.jpg)](https://youtu.be/4IkEsHyye2E)
 
-```bash
-# 최신 상태로 업데이트 후 브랜치 생성
-git fetch upstream
-git checkout -b feat/내-기능-이름 upstream/main
-```
-
-브랜치 이름 예시:
-
-| 유형 | 예시 |
-|------|------|
-| 새 기능 | `feat/multi-object-pick` |
-| 버그 수정 | `fix/tf-transform-timeout` |
-| 문서 수정 | `docs/calibration-guide` |
-| 파라미터 조정 | `config/workspace-tuning` |
+> 📹 **[Watch on YouTube](https://youtu.be/4IkEsHyye2E)**
 
 ---
 
-### 3. 변경 후 Commit
+## Overview
 
-```bash
-# 변경된 파일 확인
-git status
+This ROS 2 package integrates computer vision, coordinate transforms, and robot control into a single end-to-end system. A RealSense depth camera detects objects in 3D space, transforms their coordinates into the robot frame, and commands a Doosan E0509 arm to pick and place them autonomously.
 
-# 파일 스테이징 (수정한 파일만 명시적으로 추가)
-git add dsr_realsense_pick_place/pick_place_node.py
-git add config/pick_place_params.yaml
-
-# 커밋 — 무엇을 왜 바꿨는지 한 줄로 요약
-git commit -m "fix: TF 변환 timeout을 0.1s → 0.3s로 늘려 느린 TF 발행 환경 대응"
-```
-
-커밋 메시지 앞에 유형 접두사를 붙이면 이력을 읽기 쉽다.
-
-| 접두사 | 사용 상황 |
-|--------|----------|
-| `feat:` | 새로운 기능 추가 |
-| `fix:` | 버그 수정 |
-| `docs:` | 문서만 수정 |
-| `config:` | 파라미터/설정 조정 |
-| `refactor:` | 동작 변경 없는 코드 정리 |
+**Key challenges solved:**
+- TF calibration errors between `camera_color_optical_frame` and `base_link` — debugged systematically on real hardware
+- Modbus RTU communication instability with the ROBOTIS RH-P12-Rn gripper — resolved with DRL-based serial control and automatic topic fallback
+- Object yaw estimation using depth-band masking + PCA for gripper alignment to the object's long axis
 
 ---
 
-### 4. Fork 저장소에 Push
-
-```bash
-git push origin feat/내-기능-이름
-```
-
----
-
-### 5. Pull Request 생성
-
-1. GitHub에서 본인 Fork 저장소 페이지로 이동한다.
-2. **"Compare & pull request"** 버튼을 클릭한다.
-3. 아래 항목을 작성한다.
-
-| 항목 | 작성 내용 |
-|------|----------|
-| **제목** | 변경 내용을 한 줄로 요약 (커밋 메시지와 유사하게) |
-| **설명** | 변경 이유, 테스트 환경(가상/실기), 확인한 토픽·상태 등 |
-| **base 브랜치** | `main` (원본 저장소) |
-| **compare 브랜치** | 방금 Push한 브랜치 |
-
-4. **"Create pull request"** 를 클릭해 제출한다.
-
----
-
-### 6. 리뷰 후 반영
-
-리뷰 중 수정이 필요하면 같은 브랜치에 추가 커밋을 push하면 PR에 자동 반영된다.
-
-```bash
-# 수정 후 추가 커밋
-git add 수정한-파일
-git commit -m "fix: 리뷰 반영 — 변수명 통일"
-git push origin feat/내-기능-이름
-```
-
-Merge 된 브랜치는 삭제해도 된다.
-
-```bash
-# 로컬 브랜치 삭제
-git branch -d feat/내-기능-이름
-
-# 원격 브랜치 삭제
-git push origin --delete feat/내-기능-이름
-```
-
----
-
-### 7. 원본 저장소 최신 상태 반영 (upstream 동기화)
-
-다른 팀원의 변경사항을 내 Fork에 반영할 때 사용한다.
-
-```bash
-git fetch upstream
-git checkout main
-git merge upstream/main
-git push origin main
-```
-
----
-
-## 시스템 구성
+## System Architecture
 
 ```
 Intel RealSense D4xx
     │  RGB + Depth (aligned)
     ▼
-[object_detector]  ─────────────────────────┐
-  YOLOv8 검출                                 │
-  MAD Depth 필터링                             │  /detected_objects (JSON)
-  RealSense deproject                          │  /detection_debug_image
-  TF 좌표 변환 (camera → base_link)            │
-    │                                          ▼
-    │  /selected_object_pose           [gui_node]
-    │                                    카메라 영상 표시
-    ▼                                    물체 선택 버튼
-[pick_place_node]                        상태 표시
-  상태머신                                     │
-  Doosan 서비스 호출                           │ /selected_object_label
-  그리퍼 제어 (RH-P12-Rn Modbus RTU)  ◄───────┘
+[object_detector]  ──────────────────────────┐
+  YOLOv8 detection (custom best.pt)           │
+  MAD depth filtering                         │  /detected_objects (JSON)
+  RealSense deproject                         │  /detection_debug_image
+  TF transform (camera → base_link)           │
+    │                                         ▼
+    │  /selected_object_pose          [gui_node]
+    │                                   Camera feed display
+    ▼                                   Object selection buttons
+[pick_place_node]                       State monitoring
+  9-state state machine                        │
+  Doosan service calls                         │ /selected_object_label
+  Gripper control (Modbus RTU)  ◄──────────────┘
     │
     ▼
-Doosan E0509 + 그리퍼
+Doosan E0509 + ROBOTIS RH-P12-Rn Gripper
 ```
-
-### 노드 역할 요약
-
-| 노드 | 역할 |
-|------|------|
-| `object_detector` | RealSense에서 동기화된 RGB+Depth 수신 → YOLO 검출 → 3D 좌표 변환 → 발행 |
-| `pick_place_node` | 타겟 좌표를 받아 상태머신으로 Pick & Place 수행 |
-| `gui_node` | 검출 영상 표시, 물체 선택 버튼, 상태 모니터링 |
 
 ---
 
-## 패키지 구조
+## State Machine
+
+```
+IDLE
+ │  Move to home position
+ ▼
+DETECTING
+ │  Receive /selected_object_pose + validate workspace
+ ▼
+PRE_PICK
+ │  Move above object (pre_pick_z_offset = 0.12 m) + open gripper
+ ▼
+PICK
+ │  Descend slowly (50 mm/s) to grasp height (pick_z_offset = 0.005 m) + close gripper
+ ▼
+LIFT
+ │  Rise back to PRE_PICK height
+ ▼
+MOVE_TO_PLACE
+ │  Move to above place position (pre_place_z_offset = 0.15 m)
+ ▼
+PLACE
+ │  Descend to place_position + open gripper
+ ▼
+POST_PLACE
+ │  Rise to safe height
+ ▼
+HOME → IDLE (next cycle)
+
+Exception → ERROR (manual recovery required)
+```
+
+---
+
+## Custom YOLOv8 Training
+
+Rather than using the default COCO weights, we trained a custom YOLOv8 model on self-collected data for five target object classes:
+
+| Class   | Training Strategy |
+|---------|-------------------|
+| cup     | Solo shots → mixed with other targets → mixed with non-targets + noise |
+| pack    | Same 3-stage strategy |
+| doll    | Same 3-stage strategy |
+| pencil  | Same 3-stage strategy |
+| tape    | Same 3-stage strategy |
+
+**3-stage data collection:**
+1. Each object photographed alone (basic appearance learning)
+2. All five objects together (inter-class discrimination)
+3. Mixed with unrelated objects (false positive suppression + noise augmentation)
+
+Training used automatic augmentation: `mosaic`, `mixup`, `copy_paste`, rotation, flip, and scale variation.
+
+> ⚠️ The trained weights file (`best.pt`) is excluded from this repository via `.gitignore`. Each team member must prepare their own weights file.
+
+---
+
+## Node Summary
+
+| Node | Role |
+|------|------|
+| `object_detector` | Receives synchronised RGB + Depth from RealSense → YOLOv8 detection → MAD depth filtering → 3D coordinate transform → publish |
+| `pick_place_node` | Receives target pose → executes pick & place via state machine |
+| `gui_node` | Displays detection feed, object selection buttons, state monitoring |
+
+---
+
+## Package Structure
 
 ```
 dsr_realsense_pick_place/
 ├── dsr_realsense_pick_place/
-│   ├── object_detector.py    # RGB-D 객체 검출 노드
-│   ├── pick_place_node.py    # Pick & Place 상태머신 노드
-│   └── gui_node.py           # PyQt5 GUI 노드
+│   ├── object_detector.py      # RGB-D object detection node
+│   ├── pick_place_node.py      # Pick & Place state machine node
+│   └── gui_node.py             # PyQt5 GUI node
 ├── launch/
-│   └── pick_place.launch.py  # 전체 시스템 런치 파일
+│   └── pick_place.launch.py    # Full system launch file
 ├── config/
-│   └── pick_place_params.yaml # 노드 파라미터 설정
+│   └── pick_place_params.yaml  # Node parameters
 ├── requirements.txt
 ├── package.xml
 └── setup.py
@@ -187,62 +136,22 @@ dsr_realsense_pick_place/
 
 ---
 
-## 상태머신 흐름
+## Requirements
 
-`pick_place_node`는 아래 순서로 동작한다.
-
-```
-IDLE
- │ 홈 포지션으로 이동
- ▼
-DETECTING
- │ /selected_object_pose 수신 + 작업 영역 검증
- ▼
-PRE_PICK
- │ 물체 위 안전 높이(pre_pick_z_offset=0.12m)까지 이동 + 그리퍼 열기
- ▼
-PICK
- │ 저속(50mm/s)으로 파지 높이(pick_z_offset=0.005m)까지 하강 + 그리퍼 닫기
- ▼
-LIFT
- │ 파지 후 PRE_PICK 높이로 상승
- ▼
-MOVE_TO_PLACE
- │ Place 위치 상단(place_position + pre_place_z_offset=0.15m)으로 이동
- ▼
-PLACE
- │ 저속으로 place_position까지 하강 + 그리퍼 열기
- ▼
-POST_PLACE
- │ Place 위 안전 높이로 복귀
- ▼
-HOME
- │ 홈 포지션으로 복귀
- ▼
-IDLE (다음 사이클)
-
-예외 발생 시 → ERROR (수동 복구 필요)
-```
-
----
-
-## 요구 환경
-
-| 항목 | 버전 / 사양 |
-|------|------------|
+| Item | Version / Spec |
+|------|----------------|
 | OS | Ubuntu 22.04 LTS |
 | ROS | ROS 2 Humble |
-| Python | 3.10 이상 |
-| 로봇 | Doosan E0509 (또는 가상 모드) |
-| 카메라 | Intel RealSense D400 시리즈 (선택) |
-| 그리퍼 | ROBOTIS RH-P12-Rn (Modbus RTU over serial) |
+| Python | 3.10+ |
+| Robot | Doosan E0509 (or virtual mode) |
+| Camera | Intel RealSense D400 series (optional) |
+| Gripper | ROBOTIS RH-P12-Rn (Modbus RTU over serial) |
 
 ---
 
-## 설치
+## Installation
 
-### 1. ROS 2 기본 패키지
-
+### 1. ROS 2 packages
 ```bash
 sudo apt update
 sudo apt install -y \
@@ -255,44 +164,26 @@ sudo apt install -y \
   python3-pyqt5
 ```
 
-### 2. RealSense ROS 2 패키지
-
+### 2. RealSense ROS 2 driver
 ```bash
 sudo apt install -y ros-humble-realsense2-camera
 ```
 
-### 3. Doosan ROS 2 패키지
-
+### 3. Doosan ROS 2 packages
 ```bash
 cd ~/ros2_ws/src
 git clone <DOOSAN_REPOSITORY_URL> doosan-robot2
 ```
+Required packages: `dsr_bringup2`, `dsr_msgs2`, `dsr_controller2`, `dsr_description2`, `dsr_moveit2`
 
-필요한 패키지: `dsr_bringup2`, `dsr_msgs2`, `dsr_controller2`, `dsr_description2`, `dsr_moveit2`
-
-### 4. Python 패키지
-
+### 4. Python dependencies
 ```bash
-# YOLO (선택 — 없으면 색상 기반 fallback으로 동작)
 pip install ultralytics
-
-# 또는 requirements.txt 일괄 설치
+# or
 pip install -r ~/ros2_ws/src/dsr_realsense_pick_place/requirements.txt
 ```
 
-### 5. YOLO 가중치 파일
-
-기본 설정은 `yolov8n.pt`를 사용한다. 첫 실행 시 네트워크가 연결되어 있으면 자동으로 다운로드된다.
-오프라인 환경에서는 미리 다운로드해 두어야 한다.
-
-```bash
-python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-```
-
-> **팀 공유 주의**: YOLO 가중치 파일(`.pt`)은 `.gitignore`에 포함되어 있으므로 Git에 올리지 않는다. 각자 준비할 것.
-
-### 6. 빌드
-
+### 5. Build
 ```bash
 cd ~/ros2_ws
 colcon build --packages-select dsr_realsense_pick_place
@@ -301,26 +192,16 @@ source install/setup.bash
 
 ---
 
-## 실행
+## Running
 
-Wayland 환경에서 Qt GUI 또는 RViz가 실행되지 않으면 먼저 아래를 설정한다.
-
-```bash
-export QT_QPA_PLATFORM=xcb
-```
-
-### 가상 모드 (에뮬레이터)
-
-실제 로봇 없이 동작을 확인할 때 사용한다.
-
+### Virtual mode (no physical robot)
 ```bash
 source ~/ros2_ws/install/setup.bash
 export QT_QPA_PLATFORM=xcb
 ros2 launch dsr_realsense_pick_place pick_place.launch.py mode:=virtual
 ```
 
-### 실제 로봇
-
+### Real robot
 ```bash
 source ~/ros2_ws/install/setup.bash
 export QT_QPA_PLATFORM=xcb
@@ -329,281 +210,103 @@ ros2 launch dsr_realsense_pick_place pick_place.launch.py \
   host:=192.168.1.100
 ```
 
-### RealSense 없이 테스트
-
-카메라 없이 노드 연결만 확인할 때 사용한다.
-
+### Without RealSense (node connectivity test only)
 ```bash
 ros2 launch dsr_realsense_pick_place pick_place.launch.py use_realsense:=false
 ```
 
-### GUI 없이 실행
-
-헤드리스 환경 또는 자동화 테스트 시 사용한다.
-
-```bash
-ros2 launch dsr_realsense_pick_place pick_place.launch.py gui:=false
-```
-
 ---
 
-## 런치 인수 전체 목록
+## Key Configuration
 
-| 인수 | 기본값 | 설명 |
-|------|--------|------|
-| `mode` | `virtual` | `virtual` 또는 `real` |
-| `host` | `127.0.0.1` | 로봇 IP (real 모드) |
-| `port` | `12345` | 로봇 통신 포트 |
-| `model` | `e0509` | Doosan 모델명 |
-| `color` | `white` | 로봇 색상 |
-| `use_realsense` | `true` | RealSense 카메라 노드 실행 여부 |
-| `camera_serial` | `` | RealSense 시리얼 번호 (비어 있으면 자동) |
-| `cam_tf_x/y/z` | `0.5/0.0/0.6` | 카메라→베이스 TF 위치 (m) |
-| `cam_tf_qx/qy/qz/qw` | `0/0.707/0/0.707` | 카메라→베이스 TF 회전 (quaternion) |
-| `gui` | `true` | PyQt5 GUI 실행 여부 |
-
----
-
-## 주요 설정 포인트
-
-### 1. 카메라 TF 캘리브레이션
-
-카메라와 로봇 베이스의 상대 위치를 `pick_place.launch.py`의 `cam_tf_*` 인수로 지정한다.
-이 값이 부정확하면 Pick 좌표가 실제 물체 위치와 달라진다.
+### Camera TF calibration
+The relative position between the camera and robot base is specified via launch arguments. Incorrect values will cause pick coordinates to be offset from the actual object position.
 
 ```bash
-# launch 인수로 직접 지정
 ros2 launch dsr_realsense_pick_place pick_place.launch.py \
   cam_tf_x:=0.450 cam_tf_y:=0.010 cam_tf_z:=0.620 \
   cam_tf_qx:=0.0 cam_tf_qy:=0.707 cam_tf_qz:=0.0 cam_tf_qw:=0.707
 ```
 
-정밀 캘리브레이션이 필요하다면 `easy_handeye2` 패키지 사용을 권장한다.
+For precise calibration, the `easy_handeye2` package is recommended.
 
-### 2. YOLO 설정
-
-`config/pick_place_params.yaml`에서 조정한다.
-
+### YOLO settings (`config/pick_place_params.yaml`)
 ```yaml
 object_detector:
   ros__parameters:
     use_yolo: true
-    yolo_model: "yolov8n.pt"       # n < s < m < l < x (속도↔정확도)
-    confidence_threshold: 0.5       # 낮출수록 더 많이 검출 (오검출 증가)
-    target_classes: ["bottle", "cup", "bowl", "sports ball", "orange", "apple"]
+    yolo_model: "best.pt"           # custom trained weights
+    confidence_threshold: 0.5
+    target_classes: ["cup", "pack", "doll", "pencil", "tape"]
 ```
 
-`target_classes`를 빈 리스트(`[]`)로 설정하면 COCO 전체 클래스를 검출한다.
-
-### 3. 그리퍼 설정 (ROBOTIS RH-P12-Rn)
-
-Modbus RTU over serial 방식으로 제어한다.
-
+### Gripper settings
 ```yaml
 pick_place_node:
   ros__parameters:
-    rh12_open_stroke: 700    # 0~700 범위, 700=완전 개방
-    rh12_close_stroke: 0     # 0=완전 폐쇄
-    rh12_goal_current: 400   # 파지력 (너무 높으면 과전류, 너무 낮으면 파지 실패)
-    gripper_wait_sec: 0.8    # 그리퍼 동작 완료 대기 시간 (s)
-    rh12_allow_missing_service: true  # 서비스 없을 때 브리지 토픽으로 대체 발행
+    rh12_open_stroke: 700           # 0–700, 700 = fully open
+    rh12_close_stroke: 0            # 0 = fully closed
+    rh12_goal_current: 400          # gripping force
+    rh12_allow_missing_service: true  # fallback to topic if service unavailable
 ```
 
-시리얼 서비스(`/dsr01/gripper/serial_send_data`)가 준비되지 않은 경우
-`/gripper/rh12_stroke_cmd` 토픽으로 stroke 값을 대체 발행한다.
+---
 
-### 4. 작업 공간 설정
-
-로봇 베이스 좌표계 기준으로 유효 작업 영역을 지정한다.
-이 범위 밖의 검출 결과는 자동으로 무시된다.
-
-```yaml
-    workspace_x_min: 0.15    # 전방 최소 거리 (m)
-    workspace_x_max: 0.80    # 전방 최대 거리
-    workspace_y_min: -0.60   # 좌우 범위
-    workspace_y_max: 0.60
-    workspace_z_min: 0.0     # 높이 범위
-    workspace_z_max: 0.60
-```
-
-### 5. Place 위치 설정
-
-```yaml
-    place_position: [0.4, -0.3, 0.1]  # [x, y, z] (m), 로봇 베이스 기준
-    pre_place_z_offset: 0.15           # Place 위 접근 높이 (m)
-    place_rpy: [0.0, 180.0, 0.0]       # 툴 방향 (deg) - [0, 180, 0] = 수직 하강
-```
-
-### 6. 카메라 토픽
-
-RealSense 드라이버 버전에 따라 토픽 이름이 다를 수 있다.
-
-```yaml
-object_detector:
-  ros__parameters:
-    color_topic: "/camera/camera/color/image_raw"
-    depth_topic: "/camera/camera/aligned_depth_to_color/image_raw"
-    camera_info_topic: "/camera/camera/color/camera_info"
-```
-
-실제 발행 중인 토픽을 확인하려면:
+## Debugging
 
 ```bash
-ros2 topic list | grep camera
-```
-
----
-
-## GUI 사용법
-
-1. 런치 후 GUI 창이 열리면 왼쪽 카메라 영상에서 검출된 물체에 초록색 bbox가 표시된다.
-2. 오른쪽 버튼 패널에서 집을 물체를 클릭하면 해당 라벨로 Pick 동작이 수행된다.
-3. **자동 선택 사용** 버튼을 누르면 가장 가까운 물체를 자동으로 선택한다.
-4. 상태 패널에서 현재 Pick & Place 진행 상황을 확인할 수 있다.
-
----
-
-## 토픽/서비스 목록
-
-### 발행 토픽
-
-| 토픽 | 타입 | 발행 노드 | 설명 |
-|------|------|----------|------|
-| `/detected_object_pose` | `geometry_msgs/PoseStamped` | object_detector | 최종 선택 물체 좌표 |
-| `/selected_object_pose` | `geometry_msgs/PoseStamped` | object_detector | pick_place_node 타겟 좌표 |
-| `/detected_objects` | `std_msgs/String` | object_detector | 검출 물체 JSON 목록 |
-| `/detection_debug_image` | `sensor_msgs/Image` | object_detector | bbox 오버레이 디버그 이미지 |
-| `/pick_place_state` | `std_msgs/String` | pick_place_node | 현재 상태머신 상태 |
-| `/selected_object_label` | `std_msgs/String` | gui_node | GUI 선택 라벨 |
-
-### 구독 토픽
-
-| 토픽 | 발행 소스 | 구독 노드 |
-|------|----------|----------|
-| `/camera/camera/color/image_raw` | RealSense | object_detector |
-| `/camera/camera/aligned_depth_to_color/image_raw` | RealSense | object_detector |
-| `/camera/camera/color/camera_info` | RealSense | object_detector |
-| `/selected_object_label` | gui_node | object_detector |
-| `/selected_object_pose` | object_detector | pick_place_node |
-| `/detection_debug_image` | object_detector | gui_node |
-| `/detected_objects` | object_detector | gui_node |
-| `/pick_place_state` | pick_place_node | gui_node |
-
----
-
-## 상태 확인 및 디버그
-
-### 동작 흐름 모니터링
-
-```bash
-# GUI 선택 확인
-ros2 topic echo /selected_object_label
-
-# Pick 타겟 좌표 확인 (로봇 베이스 기준, m 단위)
-ros2 topic echo /selected_object_pose
-
-# 상태머신 진행 확인
+# Monitor state machine
 ros2 topic echo /pick_place_state
 
-# 검출 물체 전체 목록 확인 (JSON)
-ros2 topic echo /detected_objects
-```
+# Check pick target coordinates (robot base frame, metres)
+ros2 topic echo /selected_object_pose
 
-### 정상 동작 시 상태 순서
-
-```
-/pick_place_state 값이 아래 순서로 변해야 한다:
-IDLE → DETECTING → PRE_PICK → PICK → LIFT → MOVE_TO_PLACE → PLACE → POST_PLACE → HOME → IDLE
-```
-
-### 디버그 이미지 확인
-
-```bash
+# View detection image
 ros2 run rqt_image_view rqt_image_view /detection_debug_image
-```
 
-### TF 확인
-
-```bash
-# TF 트리 전체 보기
-ros2 run tf2_tools view_frames
-
-# 카메라 → 베이스 변환 실시간 확인
+# Check TF transform
 ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 ```
 
 ---
 
-## 자주 발생하는 문제
+## Topics
 
-### GUI / RViz가 열리지 않는다
+### Published
+| Topic | Type | Node | Description |
+|-------|------|------|-------------|
+| `/selected_object_pose` | `geometry_msgs/PoseStamped` | object_detector | Pick target coordinates |
+| `/detected_objects` | `std_msgs/String` | object_detector | Detected objects (JSON) |
+| `/detection_debug_image` | `sensor_msgs/Image` | object_detector | BBox overlay debug image |
+| `/pick_place_state` | `std_msgs/String` | pick_place_node | Current state machine state |
 
-Wayland 환경에서 발생한다.
-
-```bash
-export QT_QPA_PLATFORM=xcb
-```
-
-### "Cannot load platform plugin 'xcb'" 오류
-
-OpenCV와 PyQt5의 Qt 플러그인 경로 충돌. `gui_node.py`에서 환경변수를 강제 설정하므로
-보통 자동으로 해결된다. 문제가 지속되면:
-
-```bash
-export QT_QPA_PLATFORM_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/qt5/plugins
-```
-
-### TF 변환 실패 (pick 좌표가 엉뚱함)
-
-```
-TF 변환 실패: ...
-```
-
-`cam_tf_*` 값이 실제 카메라 위치와 다를 때 발생한다. TF를 확인하고 launch 인수를 수정한다.
-
-```bash
-ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
-```
-
-### YOLO 모델을 찾을 수 없다
-
-오프라인 환경에서 자동 다운로드가 실패한 경우다.
-
-```bash
-# 온라인 환경에서 미리 다운로드
-python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-```
-
-### RH-P12-Rn 그리퍼가 움직이지 않는다
-
-```yaml
-# pick_place_params.yaml에서 확인
-rh12_allow_missing_service: true  # 서비스 없을 때 토픽으로 대체 발행
-rh12_slave_id: 1                  # 그리퍼 Modbus slave ID 확인
-rh12_open_stroke: 700             # 실제 그리퍼 최대 스트로크 확인
-```
-
-`/gripper/rh12_stroke_cmd` 토픽으로 명령이 발행되는지 확인:
-
-```bash
-ros2 topic echo /gripper/rh12_stroke_cmd
-```
+### Subscribed
+| Topic | Publisher | Subscriber |
+|-------|-----------|------------|
+| `/camera/camera/color/image_raw` | RealSense | object_detector |
+| `/camera/camera/aligned_depth_to_color/image_raw` | RealSense | object_detector |
+| `/selected_object_label` | gui_node | object_detector |
+| `/selected_object_pose` | object_detector | pick_place_node |
 
 ---
 
-## 협업 규칙
+## Common Issues
 
-- 실제 장비 IP, 시리얼 번호, 캘리브레이션 값은 launch 인수로 전달하고 코드에 하드코딩하지 않는다.
-- YOLO 가중치(`.pt`)와 로그 파일은 Git에 올리지 않는다 (`.gitignore` 적용됨).
-- 개인 PC 전용 설정은 launch 인수 오버라이드로 적용하고 `pick_place_params.yaml`은 팀 공통 기준으로 유지한다.
-
-자세한 협업 가이드는 [CONTRIBUTING.md](./CONTRIBUTING.md)를 참고한다.
+| Issue | Solution |
+|-------|----------|
+| GUI / RViz won't open | `export QT_QPA_PLATFORM=xcb` |
+| TF transform failure (wrong pick position) | Check `cam_tf_*` values against actual camera position |
+| YOLO weights not found | Pre-download: `python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"` |
+| Gripper not moving | Set `rh12_allow_missing_service: true`; check `rh12_slave_id` |
 
 ---
 
-## 추후 보강 항목
+## Team
 
-- 실제 hand-eye 캘리브레이션 절차 문서
-- 그리퍼(RH-P12-Rn) 배선 및 Modbus 레지스터 맵
-- 실제 환경 토픽/TF 예시 스크린샷
-- 자주 발생하는 오류 사례 추가
+6 contributors — developed as part of an AI & Robotics bootcamp at KG Kairos, Seoul.
+
+---
+
+## License
+
+BSD-3-Clause — see [LICENSE](LICENSE) for details.
