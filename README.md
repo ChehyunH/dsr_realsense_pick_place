@@ -303,7 +303,7 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 
 ## Team
 
-6 contributors — developed as part of an AI & Robotics bootcamp at KG Kairos, Seoul.
+4 contributors — developed as part of an AI & Robotics bootcamp at KG Kairos, Seoul.
 
 ---
 
